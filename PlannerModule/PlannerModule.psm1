@@ -24,10 +24,11 @@ function Get-PlannerAuthToken
 	(
 		[parameter(Mandatory = $false, HelpMessage = "Specify a PSCredential object containing username and password.")]
 		[ValidateNotNullOrEmpty()]
-		[PSCredential]$Credential
+		[PSCredential]$Credential,
+		[switch]$RefreshToken
 	)
 	
-	Write-Host "Checking for AzureAD module..."
+	Write-Verbose "Checking for AzureAD module..."
 	# Always consider to select the latest version
 	$AadModule = Get-Module -Name "AzureAD" -ListAvailable | Sort-Object -Property Version -Descending | Select-Object -First 1
 	if ($AadModule -eq $null)
@@ -56,11 +57,30 @@ function Get-PlannerAuthToken
 	}	
 	$resourceAppIdURI = "https://graph.microsoft.com"
 	$authority = "https://login.microsoftonline.com/common"
-	
-	try
+	$authContext = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext" -ArgumentList $authority
+
+	# try to refresh first
+	if ($RefreshToken) 
 	{
-		$authContext = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext" -ArgumentList $authority
-		
+		try 
+		{
+			$authResult = $authContext.AcquireTokenSilentAsync($resourceAppIdURI, $clientId).Result
+			if ($authResult.AccessToken)
+			{
+				# Creating header for Authorization token            
+				$authHeader = @{
+					'Content-Type'  = 'application/json'
+					'Authorization' = "Bearer " + $authResult.AccessToken
+					'ExpiresOn'	    = $authResult.ExpiresOn
+				}
+				return $authHeader
+			}
+		}
+		catch { } # continue on error
+	}
+
+	try
+	{	
 		# https://msdn.microsoft.com/en-us/library/azure/microsoft.identitymodel.clients.activedirectory.promptbehavior.aspx
 		# Change the prompt behaviour to force credentials each time: Auto, Always, Never, RefreshSession
 		
@@ -114,20 +134,23 @@ function Update-PlannerModuleEnvironment
 		[Parameter(Mandatory = $false)]
 		[string]$ClientId,
 		[Parameter(Mandatory = $false)]
-		[string]$redirectUri = "urn:ietf:wg:oauth:2.0:oob"
+		[string]$redirectUri = "urn:ietf:wg:oauth:2.0:oob",
+		[switch]$Silent
 	)
-	
-	Write-Warning "WARNING: Call the 'Connect-Planner' cmdlet to use the updated environment parameters."
-	
-	Write-Host "
-	AuthUrl          : https://login.microsoftonline.com/common
-	ResourceId       : https://graph.microsoft.com
-	GraphBaseAddress : https://graph.microsoft.com
-	AppId            : $ClientId
-	RedirectLink     : $redirectUri
-	SchemaVersion    : beta
+	if (!$Silent)
+		{
+		Write-Warning "WARNING: Call the 'Connect-Planner' cmdlet to use the updated environment parameters."
+		
+		Write-Host "
+		AuthUrl          : https://login.microsoftonline.com/common
+		ResourceId       : https://graph.microsoft.com
+		GraphBaseAddress : https://graph.microsoft.com
+		AppId            : $ClientId
+		RedirectLink     : $redirectUri
+		SchemaVersion    : beta
 
-" -ForegroundColor Cyan
+		" -ForegroundColor Cyan
+	}
 	
 	$Script:ClientId = $($ClientId)
 	$Script:redirectUri = $($redirectUri)
@@ -140,7 +163,7 @@ Function Invoke-ListUnifiedGroups
 	Write-Warning "This is an old function, please use 'Get-UnifiedGroupsList' instead"
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')"
+		$uri = "https://graph.microsoft.com/v1.0/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')"
 		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
 	}
 	catch
@@ -162,7 +185,7 @@ Function Get-UnifiedGroupsList
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')"
+		$uri = "https://graph.microsoft.com/v1.0/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')"
 		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
 	}
 	catch
@@ -212,7 +235,7 @@ Function New-AADUnifiedGroup
 }
 "@
 		
-		$uri = "https://graph.microsoft.com/beta/groups"
+		$uri = "https://graph.microsoft.com/v1.0/groups"
 		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
 		Write-Host "$($GroupName) is created, Group visibility type is $($visibility)" -ForegroundColor Cyan
 	}
@@ -252,10 +275,10 @@ Function Add-AADUnifiedGroupMember
 			
 			$Body = @"
 {
-  "@odata.id": "https://graph.microsoft.com/beta/directoryObjects/$($userID)"
+  "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/$($userID)"
 }
 "@
-			$uri = "https://graph.microsoft.com/beta/groups/$GroupID/members/`$ref"
+			$uri = "https://graph.microsoft.com/v1.0/groups/$GroupID/members/`$ref"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
 			Write-Host "$($UserPrincipalNames) is added to GroupID: $($GroupID)" -ForegroundColor Cyan
 		}
@@ -285,7 +308,7 @@ Function Get-PlannerPlanGroup
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')+and+displayName+eq+`'$Groupname`'"
+		$uri = "https://graph.microsoft.com/v1.0/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')+and+displayName+eq+`'$Groupname`'"
 		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
 	}
 	catch
@@ -331,7 +354,7 @@ Function Invoke-ListPlannerPlans
 					$GroupID = (Get-PlannerPlanGroup -GroupName $($GroupName)).id
 				}
 			}
-			$Uri = "https://graph.microsoft.com/beta/groups/$GroupID/planner/plans"
+			$Uri = "https://graph.microsoft.com/v1.0/groups/$GroupID/planner/plans"
 			(Invoke-RestMethod -uri $Uri -Headers $authToken -Method Get).value
 		}
 		catch
@@ -372,7 +395,7 @@ Function Get-PlannerPlansList
 					$GroupID = (Get-PlannerPlanGroup -GroupName $($GroupName)).id
 				}
 			}
-			$Uri = "https://graph.microsoft.com/beta/groups/$GroupID/planner/plans"
+			$Uri = "https://graph.microsoft.com/v1.0/groups/$GroupID/planner/plans"
 			(Invoke-RestMethod -uri $Uri -Headers $authToken -Method Get).value
 		}
 		catch
@@ -404,7 +427,7 @@ Function Get-PlannerPlan
 	{
 		try
 		{
-			$uri = "https://graph.microsoft.com/beta/planner/plans/$PlanID"
+			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
 		}
 		catch
@@ -442,7 +465,7 @@ Function Invoke-ListPlannerPlanTasks
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/plans/$PlanID/tasks"
+			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/tasks"
 			(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
 		}
 		catch
@@ -476,7 +499,7 @@ Function Get-PlannerPlanTasks
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/plans/$PlanID/tasks"
+			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/tasks"
 			(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
 		}
 		catch
@@ -515,7 +538,7 @@ Function Invoke-ListPlannerPlanBuckets
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/plans/$PlanID/buckets"
+			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/buckets"
 			(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
 		}
 		catch
@@ -548,7 +571,7 @@ Function Get-PlannerPlanBuckets
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/plans/$PlanID/buckets"
+			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/buckets"
 			(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
 		}
 		catch
@@ -581,7 +604,7 @@ Function Get-PlannerTask
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/tasks/$TaskID"
+			$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$TaskID"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
 		}
 		catch
@@ -614,7 +637,7 @@ Function Get-PlannerTaskDetails
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta//planner/tasks/$TaskID/details"
+			$uri = "https://graph.microsoft.com/v1.0//planner/tasks/$TaskID/details"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
 		}
 		catch
@@ -647,7 +670,7 @@ Function Get-PlannerPlanDetails
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/plans/$PlanID/details"
+			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/details"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
 		}
 		catch
@@ -680,7 +703,7 @@ Function Get-PlannerBucket
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/buckets/$BucketID"
+			$uri = "https://graph.microsoft.com/v1.0/planner/buckets/$BucketID"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
 		}
 		catch
@@ -718,7 +741,7 @@ Function Invoke-ListPlannerBucketTasks
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/buckets/$BucketID/tasks"
+			$uri = "https://graph.microsoft.com/v1.0/planner/buckets/$BucketID/tasks"
 			(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
 		}
 		catch
@@ -751,7 +774,7 @@ Function Get-PlannerBucketTasksList
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/buckets/$BucketID/tasks"
+			$uri = "https://graph.microsoft.com/v1.0/planner/buckets/$BucketID/tasks"
 			(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
 		}
 		catch
@@ -784,7 +807,7 @@ Function Get-PlannerAssignedToTaskBoardTaskFormat
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/tasks/$TaskID/assignedToTaskBoardFormat"
+			$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$TaskID/assignedToTaskBoardFormat"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
 		}
 		catch
@@ -817,7 +840,7 @@ Function Get-PlannerBucketTaskBoardTaskFormat
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/tasks/$TaskID/bucketTaskBoardFormat"
+			$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$TaskID/bucketTaskBoardFormat"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
 		}
 		catch
@@ -850,7 +873,7 @@ Function Get-PlannerProgressTaskBoardTaskFormat
 		try
 		{
 			
-			$uri = "https://graph.microsoft.com/beta/planner/tasks/$TaskID/progressTaskBoardFormat"
+			$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$TaskID/progressTaskBoardFormat"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
 		}
 		catch
@@ -895,7 +918,7 @@ Function New-PlannerPlan
 		$GroupID = $results.id
 		Start-Sleep 10
 		#Get current user
-		$uri = "https://graph.microsoft.com/beta/me"
+		$uri = "https://graph.microsoft.com/v1.0/me"
 		$UserPrincipalName = (Invoke-RestMethod -Uri $uri -Headers $authToken -Method GET).UserPrincipalName
 		Add-AADUnifiedGroupMember -GroupID $GroupID -UserPrincipalName $UserPrincipalName
 		Start-Sleep 10
@@ -911,7 +934,7 @@ Function New-PlannerPlan
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/planner/plans"
+		$uri = "https://graph.microsoft.com/v1.0/planner/plans"
 		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
 		Write-Host "$($PlanName) is created. Group visibility is $($visibility)" -ForegroundColor Cyan
 	}
@@ -944,9 +967,9 @@ Function New-PlannerPlanToGroup
 	
 	#Add current user to group
 	#Get current user
-	$uri = "https://graph.microsoft.com/beta/me"
+	$uri = "https://graph.microsoft.com/v1.0/me"
 	$UserID = (Invoke-RestMethod -Uri $uri -Headers $authToken -Method GET).id
-	$uri = "https://graph.microsoft.com/beta/Groups/$GroupID/members?`$filter=id eq '$UserID'"
+	$uri = "https://graph.microsoft.com/v1.0/Groups/$GroupID/members?`$filter=id eq '$UserID'"
 	
 	try
 	{
@@ -962,11 +985,11 @@ Function New-PlannerPlanToGroup
 		{
 			$Body = @"
 {
-  "@odata.id": "https://graph.microsoft.com/beta/directoryObjects/$($userID)"
+  "@odata.id": "https://graph.microsoft.com/v1.0/directoryObjects/$($userID)"
 }
 "@
 			
-			$uri = "https://graph.microsoft.com/beta/groups/$GroupID/members/`$ref"
+			$uri = "https://graph.microsoft.com/v1.0/groups/$GroupID/members/`$ref"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
 			Start-Sleep 10
 		}
@@ -991,7 +1014,7 @@ Function New-PlannerPlanToGroup
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/planner/plans"
+		$uri = "https://graph.microsoft.com/v1.0/planner/plans"
 		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
 		Write-Host "$($PlanName) is created." -ForegroundColor Cyan
 	}
@@ -1033,7 +1056,7 @@ Function New-PlannerBucket
 		
 		try
 		{
-			$uri = "https://graph.microsoft.com/beta/planner/buckets"
+			$uri = "https://graph.microsoft.com/v1.0/planner/buckets"
 			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
 			Write-Host "$($BucketName) is created." -ForegroundColor Cyan
 		}
@@ -1138,7 +1161,7 @@ Function New-PlannerTask
 	#Make graph call
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/planner/tasks"
+		$uri = "https://graph.microsoft.com/v1.0/planner/tasks"
 		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
 		Write-Host "$($TaskName) is created." -ForegroundColor Cyan
 	}
@@ -1162,14 +1185,14 @@ Function Get-AADUserDetails
 	param
 	(
 		[Parameter(Mandatory = $True)]
-		$UserPrincipalName
+		$UserIdentity # UserPrincipalName or id
 	)
 	
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/users?`$filter=userPrincipalName eq '$($UserPrincipalName)'"
-		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method GET).value
+		$uri = "https://graph.microsoft.com/v1.0/users/$($UserIdentity)"
+		return (Invoke-RestMethod -Uri $uri -Headers $authToken -Method GET)		
 	}
 	catch
 	{
@@ -1223,7 +1246,7 @@ Function Invoke-AssignPlannerTask
 		
 		try
 		{
-			$uri = "https://graph.microsoft.com/beta/planner/tasks/$($TaskID)"
+			$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)"
 			Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
 			Write-Host "$($UserPrincipalNames) is assigned to Task: $($TaskTile)" -ForegroundColor Cyan
 		}
@@ -1282,7 +1305,7 @@ Function Update-PlannerPlanCategories
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/planner/plans/$($PlanID)/details"
+		$uri = "https://graph.microsoft.com/v1.0/planner/plans/$($PlanID)/details"
 		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
 		Write-Host "Categories/Lables are updated" -ForegroundColor Cyan
 	}
@@ -1342,7 +1365,7 @@ Function Invoke-AssignPlannerTaskCategories
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/planner/tasks/$($TaskID)"
+		$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)"
 		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
 		Write-Host "Categories are assigned to Task: $($TaskName)" -ForegroundColor Cyan
 	}
@@ -1389,7 +1412,7 @@ Function Add-PlannerTaskDescription
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/planner/tasks/$($TaskID)/Details"
+		$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)/Details"
 		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
 		Write-Host "Task Description is updated" -ForegroundColor Cyan
 	}
@@ -1445,7 +1468,7 @@ Function Add-PlannerTaskChecklist
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/beta/planner/tasks/$($TaskID)/Details"
+		$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)/Details"
 		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
 		Write-Host "CheckList is added" -ForegroundColor Cyan
 	}
@@ -1470,10 +1493,8 @@ Function Connect-Planner
 	[OutputType([Bool])]
 	Param
 	(
-		[Parameter(Mandatory = $false, Position = 0, ParameterSetName = "AuthPrompt")]
-		[ValidateNotNullOrEmpty()]
-		[ValidateSet($false, $true)]
-		$ForceNonInteractive,
+		[switch]$ForceInteractive,
+		[switch]$ReturnToken,
 		[parameter(Mandatory = $false, ParameterSetName = "AuthCredential", HelpMessage = "Specify a PSCredential object containing username and password.")]
 		[ValidateNotNullOrEmpty()]
 		[PSCredential]$Credential
@@ -1482,41 +1503,25 @@ Function Connect-Planner
 	
 	#Authentication
 	
-	if ($ForceNonInteractive -eq $true)
+	if ($ForceInteractive)
 	{
 		# Getting the authorization token
 		$Script:authToken = Get-PlannerAuthToken
-		return $authToken
+
 	}
-	
-	if ($ForceNonInteractive -eq $false)
-	{
-		
-		# Checking if authToken exists before running authentication
-		if ($Script:authToken)
-		{
-			# Setting DateTime to Universal time to work in all timezones
-			$DateTime = (Get-Date).ToUniversalTime()
-			# If the authToken exists checking when it expires
-			$TokenExpires = ($authToken.ExpiresOn.datetime - $DateTime).Minutes
-			if ($TokenExpires -le 0)
-			{
-				Write-Host "Authentication Token expired" $TokenExpires "minutes ago"
-				$Script:authToken = Get-PlannerAuthToken
-			}
-		}
-		# Authentication doesn't exist, calling Get-AuthToken function
-		else
-		{
-			# Getting the authorization token
-			$Script:authToken = Get-PlannerAuthToken
-		}
-	}
-	
-	if ($Credential)
+	elseif ($Credential)
 	{
 		# Getting the authorization token
 		$Script:authToken = Get-PlannerAuthToken -Credential $Credential
+	}	
+	else
+	{
+		# try to refresh token
+		$Script:authToken = Get-PlannerAuthToken -RefreshToken
+	}
+	
+	if ($ReturnToken) {
+		return $authToken
 	}
 	
 }
