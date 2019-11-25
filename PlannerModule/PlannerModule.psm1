@@ -181,12 +181,20 @@ Function Invoke-ListUnifiedGroups
 
 Function Get-UnifiedGroupsList
 {
+	Param 
+	(
+		[switch]$All # to retrive all groups , otherweise only my groups
+	)
 	# .ExternalHelp PlannerModule.psm1-Help.xml	
 	
 	try
-	{
-		$uri = "https://graph.microsoft.com/v1.0/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')"
-		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+	{	
+		if ( $All ) {
+			$uri = "https://graph.microsoft.com/v1.0/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')"
+		} else {
+			$uri = "https://graph.microsoft.com/v1.0/me/memberOf/$/microsoft.graph.group?`$filter=groupTypes/any(a:a eq 'unified')"
+		}
+		return (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
 	}
 	catch
 	{
@@ -1086,84 +1094,38 @@ Function New-PlannerTask
 		[Parameter(Mandatory = $True)]
 		$TaskName,
 		[Parameter(Mandatory = $False)]
-		$BucketID,
+		$bucketId,
 		[Parameter(Mandatory = $False, HelpMessage = "DateTime format needs to be YYYY-MM-DD, example 2019-06-30")]
-		[DateTime]$startDate,
+		[DateTime]$startDateTime,
 		[Parameter(Mandatory = $False, HelpMessage = "DateTime format needs to be YYYY-MM-DD, example 2019-06-30")]
-		[DateTime]$dueDate
+		[DateTime]$dueDateTime,
+		$percentComplete,
+		$assigneePriority
 	)
 	
 	#user defualt bucket name To do
-	If (!$BucketID)
+	If (!$bucketId)
 	{
-		$BucketID = (Get-PlannerPlanBuckets -PlanID $($PlanID) | Where-Object { $_.name -like 'To do' }).id
+		$bucketId = (Get-PlannerPlanBuckets -PlanID $($PlanID) | Where-Object { $_.name -like 'To do' }).id
+	}
+	$Body = @{ 
+	  planId = $PlanID
+	  bucketId = $BucketID
+	  title= $TaskName
 	}
 	
-	#if start date and due date is not definde
-	if (!$startDate -and !$dueDate)
-	{
-		$Body = @"
-{
-  "planId": "$($PlanID)",
-  "bucketId": "$($BucketID)",
-  "title": "$($TaskName)",
-}
-"@
-	}
-	
-	#if start date is due date are definded
-	if ($startDate -and $dueDate)
-	{
-		$startDateformat = $startDate.ToString("yyyy-MM-ddT10:00:00Z")
-		$dueDateformat = $dueDate.ToString("yyyy-MM-ddT10:00:00Z")
-		
-		$Body = @"
-{
-    "planId": "$($PlanID)",
-    "bucketId": "$($BucketID)",
-    "title": "$($TaskName)",
-    "startDateTime": "$($startDateformat)",
-    "dueDateTime": "$($dueDateformat)"
-}
-"@
-	}
-	
-	#if no start date, but has duedate
-	if (!$startDate -and $dueDate)
-	{
-		$dueDateformat = $dueDate.ToString("yyyy-MM-ddT10:00:00Z")
-		
-		$Body = @"
-{
-  "planId": "$($PlanID)",
-  "bucketId": "$($BucketID)",
-  "title": "$($TaskName)",
-  "dueDateTime": "$($dueDateformat)"
-}
-"@
-	}
-	
-	#if has start date, but no due date
-	if ($startDate -and !$dueDate)
-	{
-		$startDateformat = $startDate.ToString("yyyy-MM-ddT10:00:00Z")
-		
-		$Body = @"
-{
-  "planId": "$($PlanID)",
-  "bucketId": "$($BucketID)",
-  "title": "$($TaskName)",
-  "startDateTime": "$($startDateformat)"
-}
-"@
-	}
+	if ($startDateTime)		{ $Body.startDateTime = $startDateTime }
+	if ($dueDateTime) 		{ $Body.dueDateTime = $dueDateTime 	}
+	if ($percentComplete) 	{ $Body.percentComplete = $percentComplete }
 	
 	#Make graph call
 	try
 	{
 		$uri = "https://graph.microsoft.com/v1.0/planner/tasks"
-		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
+		Write-Verbose "creating task $($TaskName) in plan $($PlanID)"
+		$result = Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body  ( $Body | ConvertTo-Json )
 		Write-Host "$($TaskName) is created." -ForegroundColor Cyan
+		return $result
 	}
 	catch
 	{
