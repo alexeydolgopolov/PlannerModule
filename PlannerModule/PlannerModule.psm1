@@ -69,7 +69,7 @@ function Get-PlannerAuthToken
 			{
 				# Creating header for Authorization token            
 				$authHeader = @{
-					'Content-Type'  = 'application/json'
+					'Content-Type'  = 'application/json;charset=utf-8'
 					'Authorization' = "Bearer " + $authResult.AccessToken
 					'ExpiresOn'	    = $authResult.ExpiresOn
 				}
@@ -104,7 +104,7 @@ function Get-PlannerAuthToken
 		{
 			# Creating header for Authorization token            
 			$authHeader = @{
-				'Content-Type'  = 'application/json'
+				'Content-Type'  = 'application/json;charset=utf-8'
 				'Authorization' = "Bearer " + $authResult.AccessToken
 				'ExpiresOn'	    = $authResult.ExpiresOn
 			}
@@ -244,7 +244,7 @@ Function New-AADUnifiedGroup
 "@
 		
 		$uri = "https://graph.microsoft.com/v1.0/groups"
-		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
+		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body -ContentType 'application/json; charset=utf-8'
 		Write-Host "$($GroupName) is created, Group visibility type is $($visibility)" -ForegroundColor Cyan
 	}
 	catch
@@ -279,7 +279,7 @@ Function Add-AADUnifiedGroupMember
 		{
 			
 			#Get users id
-			$userID = (Get-AADUserDetails -UserPrincipalName $UserPrincipalName).id
+			$userID = (Get-AADUserDetails -UserIdentity $UserPrincipalName).id
 			
 			$Body = @"
 {
@@ -287,7 +287,7 @@ Function Add-AADUnifiedGroupMember
 }
 "@
 			$uri = "https://graph.microsoft.com/v1.0/groups/$GroupID/members/`$ref"
-			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
+			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body -ContentType 'application/json; charset=utf-8'
 			Write-Host "$($UserPrincipalNames) is added to GroupID: $($GroupID)" -ForegroundColor Cyan
 		}
 		catch
@@ -943,7 +943,7 @@ Function New-PlannerPlan
 	try
 	{
 		$uri = "https://graph.microsoft.com/v1.0/planner/plans"
-		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
+		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body -ContentType 'application/json; charset=utf-8'
 		Write-Host "$($PlanName) is created. Group visibility is $($visibility)" -ForegroundColor Cyan
 	}
 	catch
@@ -998,7 +998,7 @@ Function New-PlannerPlanToGroup
 "@
 			
 			$uri = "https://graph.microsoft.com/v1.0/groups/$GroupID/members/`$ref"
-			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
+			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body -ContentType 'application/json; charset=utf-8'
 			Start-Sleep 10
 		}
 		catch
@@ -1023,7 +1023,7 @@ Function New-PlannerPlanToGroup
 	try
 	{
 		$uri = "https://graph.microsoft.com/v1.0/planner/plans"
-		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
+		Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body -ContentType 'application/json; charset=utf-8'
 		Write-Host "$($PlanName) is created." -ForegroundColor Cyan
 	}
 	catch
@@ -1065,7 +1065,7 @@ Function New-PlannerBucket
 		try
 		{
 			$uri = "https://graph.microsoft.com/v1.0/planner/buckets"
-			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body
+			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body -ContentType 'application/json; charset=utf-8'
 			Write-Host "$($BucketName) is created." -ForegroundColor Cyan
 		}
 		catch
@@ -1123,7 +1123,7 @@ Function New-PlannerTask
 	{
 		$uri = "https://graph.microsoft.com/v1.0/planner/tasks"
 		Write-Verbose "creating task $($TaskName) in plan $($PlanID)"
-		$result = Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body  ( $Body | ConvertTo-Json )
+		$result = Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body ( $Body | ConvertTo-Json ) -ContentType 'application/json; charset=utf-8'
 		Write-Host "$($TaskName) is created." -ForegroundColor Cyan
 		return $result
 	}
@@ -1153,7 +1153,7 @@ Function Get-AADUserDetails
 	
 	try
 	{
-		$uri = "https://graph.microsoft.com/v1.0/users/$($UserIdentity)"
+		$uri = "https://graph.microsoft.com/v1.0/users/$($UserIdentity)"		
 		return (Invoke-RestMethod -Uri $uri -Headers $authToken -Method GET)		
 	}
 	catch
@@ -1164,7 +1164,7 @@ Function Get-AADUserDetails
 			Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
 		}
 		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		break
+		return $null
 	}
 }
 
@@ -1185,7 +1185,7 @@ Function Invoke-AssignPlannerTask
 	foreach ($UserPrincipalName in $UserPrincipalNames)
 	{
 		#Get users id
-		$userID = (Get-AADUserDetails -UserPrincipalName $UserPrincipalName).id
+		$userID = (Get-AADUserDetails -UserIdentity $UserPrincipalName).id
 		
 		#Get Task details
 		$respond = Get-PlannerTask -TaskID $TaskID
@@ -1209,7 +1209,7 @@ Function Invoke-AssignPlannerTask
 		try
 		{
 			$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)"
-			Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
+			Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
 			Write-Host "$($UserPrincipalNames) is assigned to Task: $($TaskTile)" -ForegroundColor Cyan
 		}
 		catch
@@ -1268,7 +1268,7 @@ Function Update-PlannerPlanCategories
 	try
 	{
 		$uri = "https://graph.microsoft.com/v1.0/planner/plans/$($PlanID)/details"
-		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
+		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
 		Write-Host "Categories/Lables are updated" -ForegroundColor Cyan
 	}
 	catch
@@ -1328,7 +1328,7 @@ Function Invoke-AssignPlannerTaskCategories
 	try
 	{
 		$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)"
-		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
+		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
 		Write-Host "Categories are assigned to Task: $($TaskName)" -ForegroundColor Cyan
 	}
 	catch
@@ -1375,7 +1375,7 @@ Function Add-PlannerTaskDescription
 	try
 	{
 		$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)/Details"
-		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
+		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
 		Write-Host "Task Description is updated" -ForegroundColor Cyan
 	}
 	catch
@@ -1431,7 +1431,7 @@ Function Add-PlannerTaskChecklist
 	try
 	{
 		$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)/Details"
-		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body
+		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
 		Write-Host "CheckList is added" -ForegroundColor Cyan
 	}
 	catch
