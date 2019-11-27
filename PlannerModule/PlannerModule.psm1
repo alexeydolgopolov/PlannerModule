@@ -50,11 +50,6 @@ function Get-PlannerAuthToken
 	[System.Reflection.Assembly]::LoadFrom($adal) | Out-Null
 	[System.Reflection.Assembly]::LoadFrom($adalforms) | Out-Null
 	
-	if ($PlannerEnvUpdated -ne $true)
-	{
-		$clientId = "3556cd23-09eb-42b3-a3b9-72cba5c7926e"
-		$redirectUri = "urn:ietf:wg:oauth:2.0:oob"
-	}	
 	$resourceAppIdURI = "https://graph.microsoft.com"
 	$authority = "https://login.microsoftonline.com/common"
 	$authContext = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext" -ArgumentList $authority
@@ -132,29 +127,33 @@ function Update-PlannerModuleEnvironment
 	param
 	(
 		[Parameter(Mandatory = $false)]
-		[string]$ClientId,
+		[string]$ClientId = "3556cd23-09eb-42b3-a3b9-72cba5c7926e",
 		[Parameter(Mandatory = $false)]
 		[string]$redirectUri = "urn:ietf:wg:oauth:2.0:oob",
+		$retryCount = 4,
+		$retryDelay = 2,
 		[switch]$Silent
 	)
-	if (!$Silent)
-		{
+	if (!$Silent) {
 		Write-Warning "WARNING: Call the 'Connect-Planner' cmdlet to use the updated environment parameters."
 		
 		Write-Host "
-		AuthUrl          : https://login.microsoftonline.com/common
-		ResourceId       : https://graph.microsoft.com
-		GraphBaseAddress : https://graph.microsoft.com
-		AppId            : $ClientId
-		RedirectLink     : $redirectUri
-		SchemaVersion    : beta
+		AuthUrl            : https://login.microsoftonline.com/common
+		ResourceId         : https://graph.microsoft.com
+		GraphBaseAddress   : https://graph.microsoft.com
+		AppId              : $ClientId
+		RedirectLink       : $redirectUri
+		SchemaVersion      : beta
+		Query retry count  : $retryCount
+		Query retry delay  : $retryDelay
 
 		" -ForegroundColor Cyan
 	}
 	
 	$Script:ClientId = $($ClientId)
 	$Script:redirectUri = $($redirectUri)
-	$Script:PlannerEnvUpdated = $true
+	$Script:retryCount = $retryCount
+	$Script:retryDelay = $retryDelay
 }
 
 Function Invoke-ListUnifiedGroups
@@ -187,26 +186,27 @@ Function Get-UnifiedGroupsList
 	)
 	# .ExternalHelp PlannerModule.psm1-Help.xml	
 	
-	try
-	{	
-		if ( $All ) {
-			$uri = "https://graph.microsoft.com/v1.0/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')"
-		} else {
-			$uri = "https://graph.microsoft.com/v1.0/me/memberOf/$/microsoft.graph.group?`$filter=groupTypes/any(a:a eq 'unified')"
+	for ($i=1; $i -le $retryCount; $i++) {
+		try	{	
+			if ( $All ) {
+				$uri = "https://graph.microsoft.com/v1.0/Groups?`$filter=groupTypes/any(c:c+eq+'Unified')"
+			} else {
+				$uri = "https://graph.microsoft.com/v1.0/me/memberOf/$/microsoft.graph.group?`$filter=groupTypes/any(a:a eq 'unified')"
+			}
+			return (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+		} catch {
+			if ( $i -eq $retryCount) { 
+				$ex = $_.Exception
+				if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+				{
+					Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+				}
+				Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+				break
+			}
 		}
-		return (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
-	}
-	catch
-	{
-		$ex = $_.Exception
-		if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-		{
-			Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
-		}
-		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		break
-	}
-	
+		Start-Sleep -seconds $retryDelay
+    }
 }
 
 Function New-AADUnifiedGroup
@@ -392,29 +392,29 @@ Function Get-PlannerPlansList
 		$GroupName
 	)
 	
-	Process
-	{
-		try
-		{
-			switch ($PsCmdlet.ParameterSetName)
-			{
-				'GroupName'
-				{
-					$GroupID = (Get-PlannerPlanGroup -GroupName $($GroupName)).id
+	Process {
+		for ($i=1; $i -le $retryCount; $i++) {
+			try {
+				switch ($PsCmdlet.ParameterSetName){
+					'GroupName' {
+						$GroupID = (Get-PlannerPlanGroup -GroupName $($GroupName)).id
+					}
+				}
+				$Uri = "https://graph.microsoft.com/v1.0/groups/$GroupID/planner/plans"
+				$result =  (Invoke-RestMethod -uri $Uri -Headers $authToken -Method Get).value
+				return $result
+			} catch {
+				if ( $i -eq $retryCount) {  
+					$ex = $_.Exception
+					if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+					{
+						Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+					}
+					Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+					break
 				}
 			}
-			$Uri = "https://graph.microsoft.com/v1.0/groups/$GroupID/planner/plans"
-			(Invoke-RestMethod -uri $Uri -Headers $authToken -Method Get).value
-		}
-		catch
-		{
-			$ex = $_.Exception
-			if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-			{
-				Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
-			}
-			Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-			break
+			Start-Sleep -seconds $retryDelay
 		}
 	}
 }
@@ -431,23 +431,25 @@ Function Get-PlannerPlan
 		[string[]]$PlanID
 	)
 	
-	Process
-	{
-		try
-		{
-			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID"
-			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
-		}
-		catch
-		{
-			$ex = $_.Exception
-			if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-			{
-				Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+	Process {
+		for ($i=1; $i -le $retryCount; $i++) {
+			try {
+				$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID"
+				$result = Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
+				return $result
+			} catch {
+				if ( $i -eq $retryCount) { 
+					$ex = $_.Exception
+					if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+					{
+						Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+					}
+					Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+					break
+				}
 			}
-			Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-			break
-		}
+			Start-Sleep -seconds $retryDelay
+		}		
 	}
 }
 
@@ -502,26 +504,26 @@ Function Get-PlannerPlanTasks
 		[string[]]$PlanID
 	)
 	
-	Process
-	{
-		try
-		{
-			
-			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/tasks"
-			(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
-		}
-		catch
-		{
-			$ex = $_.Exception
-			if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-			{
-				Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+	Process {
+		for ($i=1; $i -le $retryCount; $i++) {
+			try {				
+				$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/tasks"
+				$result = (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+				return $result
+			} catch {
+				if ( $i -eq $retryCount) { 
+					$ex = $_.Exception
+					if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+					{
+						Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+					}
+					Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+					break
+				}
 			}
-			Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-			break
 		}
-	}
-	
+		Start-Sleep -seconds $retryDelay
+    }
 }
 
 Function Invoke-ListPlannerPlanBuckets
@@ -574,24 +576,25 @@ Function Get-PlannerPlanBuckets
 		[string[]]$PlanID
 	)
 	
-	Process
-	{
-		try
-		{
-			
-			$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/buckets"
-			(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
-		}
-		catch
-		{
-			$ex = $_.Exception
-			if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-			{
-				Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+	Process	{
+		for ($i=1; $i -le $retryCount; $i++) {
+			try {			
+				$uri = "https://graph.microsoft.com/v1.0/planner/plans/$PlanID/buckets"
+				$result = (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+				return $result
+			} catch {
+				if ( $i -eq $retryCount) { 
+					$ex = $_.Exception
+					if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+					{
+						Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+					}
+					Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+					break
+				}
 			}
-			Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-			break
-		}
+			Start-Sleep -seconds $retryDelay
+		}	
 	}
 }
 
@@ -640,23 +643,23 @@ Function Get-PlannerTaskDetails
 		[string[]]$TaskID
 	)
 	
-	Process
-	{
-		try
-		{
-			
-			$uri = "https://graph.microsoft.com/v1.0//planner/tasks/$TaskID/details"
-			Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
-		}
-		catch
-		{
-			$ex = $_.Exception
-			if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-			{
-				Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+	Process	{
+		for ($i=1; $i -le $retryCount; $i++) {
+			try {				
+				$uri = "https://graph.microsoft.com/v1.0//planner/tasks/$TaskID/details"
+				$result = Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
+				return $result
+			} catch {
+				if ( $i -eq $retryCount) { 
+					$ex = $_.Exception
+					if ($($ex.Response.StatusDescription) -match 'Unauthorized') {
+						Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+					}
+					Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+					break
+				}
 			}
-			Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-			break
+			Start-Sleep -seconds $retryDelay
 		}
 	}
 }
@@ -1052,31 +1055,30 @@ Function New-PlannerBucket
 		$BucketName
 	)
 	
-	Process
-	{
-		$Body = @"
-{
-  "name": "$($BucketName)",
-  "planId": "$($PlanID)",
-  "orderHint": " !"
-}
-"@
-		
-		try
-		{
-			$uri = "https://graph.microsoft.com/v1.0/planner/buckets"
-			Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body -ContentType 'application/json; charset=utf-8'
-			Write-Host "$($BucketName) is created." -ForegroundColor Cyan
-		}
-		catch
-		{
-			$ex = $_.Exception
-			if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-			{
-				Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+	Process {
+		$Body = @{
+			name = "$($BucketName)"
+			planId = "$($PlanID)"
+			orderHint = " !"
+		} | ConvertTo-Json -Compress
+		for ($i=1; $i -le $retryCount; $i++) {
+			try {
+				$uri = "https://graph.microsoft.com/v1.0/planner/buckets"
+				$result = Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body $Body -ContentType 'application/json; charset=utf-8'
+				Write-Host "$($BucketName) is created." -ForegroundColor Cyan
+				return $result
+			} catch {
+				if ( $i -eq $retryCount) { 
+					$ex = $_.Exception
+					if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+					{
+						Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+					}
+					Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+					break
+				}
 			}
-			Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-			break
+			Start-Sleep -seconds $retryDelay
 		}
 	}
 }
@@ -1118,25 +1120,27 @@ Function New-PlannerTask
 	if ($dueDateTime) 		{ $Body.dueDateTime = $dueDateTime 	}
 	if ($percentComplete) 	{ $Body.percentComplete = $percentComplete }
 	
-	#Make graph call
-	try
-	{
-		$uri = "https://graph.microsoft.com/v1.0/planner/tasks"
-		Write-Verbose "creating task $($TaskName) in plan $($PlanID)"
-		$result = Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body ( $Body | ConvertTo-Json ) -ContentType 'application/json; charset=utf-8'
-		Write-Host "$($TaskName) is created." -ForegroundColor Cyan
-		return $result
-	}
-	catch
-	{
-		$ex = $_.Exception
-		if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-		{
-			Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+	for ($i=1; $i -le $retryCount; $i++) {
+		try {
+			$uri = "https://graph.microsoft.com/v1.0/planner/tasks"
+			Write-Verbose "creating task $($TaskName) in plan $($PlanID)"
+			$result = Invoke-RestMethod -Uri $uri -Headers $authToken -Method POST -Body ( $Body | ConvertTo-Json -Compress ) -ContentType 'application/json; charset=utf-8'
+			Write-Host "$($TaskName) is created." -ForegroundColor Cyan
+			return $result
+		} catch {
+			if ( $i -eq $retryCount) { 
+				$ex = $_.Exception
+				if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+				{
+					Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+				}
+				Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+				break
+			}
 		}
-		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		break
-	}
+		Start-Sleep -seconds $retryDelay
+    }
+
 }
 
 Function Get-AADUserDetails
@@ -1362,33 +1366,31 @@ Function Add-PlannerTaskDescription
 	$respond = Get-PlannerTaskDetails -TaskID $TaskID
 	$ETag = $respond.'@odata.etag'
 	
-	$Body = @"
-{
-    "description": "$($Description)"
-}
-"@
+	$Body = @{ description = "$($Description)" } | ConvertTo-Json -Compress
 	
 	#Add if-match to new tocket header
 	$NewToken = $authToken.Clone()
 	$NewToken.add("If-Match", $ETag)
 	
-	try
-	{
-		$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)/Details"
-		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
-		Write-Host "Task Description is updated" -ForegroundColor Cyan
-	}
-	catch
-	{
-		$ex = $_.Exception
-		if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-		{
-			Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+	for ($i=1; $i -le $retryCount; $i++) {
+		try {
+			$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)/Details"
+			$result = Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
+			Write-Host "Task Description is updated" -ForegroundColor Cyan
+			return $result
+		} catch {
+			if ( $i -eq $retryCount) { 
+				$ex = $_.Exception
+				if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+				{
+					Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+				}
+				Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+				break
+			}
 		}
-		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		break
-	}
-	
+		Start-Sleep -seconds $retryDelay
+    }
 }
 
 Function Add-PlannerTaskChecklist
@@ -1409,42 +1411,40 @@ Function Add-PlannerTaskChecklist
 	#Get Task details
 	$respond = Get-PlannerTaskDetails -TaskID $TaskID
 	$ETag = $respond.'@odata.etag'
-	
 	$checklist = (New-Guid).Guid
-	
-	$Body = @"
-{
-    "checklist": {
-        "$checklist": {
-            "@odata.type": "#microsoft.graph.plannerChecklistItem",
-            "isChecked": $($IsChecked.tostring().ToLower()),
-            "title": "$($Title)"
-        }
-    }
-}
-"@
-	
+	$Body = @{
+		checklist = @{
+			$checklist = @{
+				"@odata.type" = "#microsoft.graph.plannerChecklistItem"
+				isChecked = $IsChecked
+				title = "$($Title)"
+			}
+		}
+	} | ConvertTo-Json -Depth 5 -Compress
+
 	#Add if-match to new tocket header
 	$NewToken = $authToken.Clone()
 	$NewToken.add("If-Match", $ETag)
 	
-	try
-	{
-		$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)/Details"
-		Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
-		Write-Host "CheckList is added" -ForegroundColor Cyan
-	}
-	catch
-	{
-		$ex = $_.Exception
-		if ($($ex.Response.StatusDescription) -match 'Unauthorized')
-		{
-			Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+	for ($i=1; $i -le $retryCount; $i++) {
+		try {
+			$uri = "https://graph.microsoft.com/v1.0/planner/tasks/$($TaskID)/Details"
+			$result = Invoke-RestMethod -Uri $uri -Headers $NewToken -Method PATCH -Body $Body -ContentType 'application/json; charset=utf-8'
+			Write-Host "CheckList is added" -ForegroundColor Cyan
+			return $result
+		} catch {
+			if ( $i -eq $retryCount) { 
+				$ex = $_.Exception
+				if ($($ex.Response.StatusDescription) -match 'Unauthorized')
+				{
+					Write-Error "Unauthorized, Please check your permissions and use the 'Connect-Planner' command to authenticate"
+				}
+				Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
+				break
+			}
 		}
-		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		break
-	}
-	
+		Start-Sleep -seconds $retryDelay
+    }
 }
 
 Function Connect-Planner
@@ -1487,3 +1487,7 @@ Function Connect-Planner
 	}
 	
 }
+
+
+# init the module 
+Update-PlannerModuleEnvironment -Silent
